@@ -1,0 +1,416 @@
+# ============================================================================
+# POLITIQUES KYVERNO - CLUSTER-WIDE
+# ============================================================================
+# À DÉPLOYER PAR L'ADMIN DU CLUSTER via ArgoCD
+#
+# Ces politiques s'appliquent à TOUS les namespaces cesiX (cesi1 à cesi10)
+# pour garantir la sécurité et les bonnes pratiques Kubernetes.
+#
+# ArgoCD Application : kyverno-policies
+# Path: k8s/kyverno/
+# ============================================================================
+
+---
+# ============================================================================
+# CLUSTER POLICY 1 : VALIDATION - Sécurité des conteneurs
+# ============================================================================
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: formation-security-policies
+  annotations:
+    policies.kyverno.io/title: Politiques de sécurité pour formation DevSecOps
+    policies.kyverno.io/category: Security, Best Practices
+    policies.kyverno.io/severity: high
+    policies.kyverno.io/subject: Pod, Deployment, StatefulSet
+    policies.kyverno.io/description: >-
+      Ensemble de politiques de sécurité pour garantir que les déploiements
+      respectent les bonnes pratiques de sécurité Kubernetes.
+      S'applique aux namespaces cesi1 à cesi10 pour la formation.
+spec:
+  # Mode Enforce : Bloque les ressources non conformes
+  validationFailureAction: Enforce
+
+  # Background scanning : Scan des ressources existantes
+  background: true
+
+  rules:
+
+  # --------------------------------------------------------------------------
+  # RÈGLE 1 : Interdire les conteneurs privileged
+  # --------------------------------------------------------------------------
+  - name: deny-privileged-containers
+    match:
+      any:
+      - resources:
+          kinds:
+          - Pod
+          - Deployment
+          - StatefulSet
+          - DaemonSet
+          namespaces:
+          - "cesi*"
+    validate:
+      message: >-
+        ❌ SÉCURITÉ : Les conteneurs privileged sont interdits.
+        Un conteneur privileged a accès à toutes les ressources du host.
+        Retirez 'privileged: true' de votre securityContext.
+      pattern:
+        spec:
+          =(ephemeralContainers):
+          - =(securityContext):
+              =(privileged): false
+          =(initContainers):
+          - =(securityContext):
+              =(privileged): false
+          containers:
+          - =(securityContext):
+              =(privileged): false
+
+  # --------------------------------------------------------------------------
+  # RÈGLE 2 : Exiger des limites de ressources
+  # --------------------------------------------------------------------------
+  - name: require-resources-limits
+    match:
+      any:
+      - resources:
+          kinds:
+          - Deployment
+          - StatefulSet
+          namespaces:
+          - "cesi*"
+    validate:
+      message: >-
+        ❌ RESSOURCES : Les conteneurs doivent avoir des limites de CPU et mémoire définies.
+        Cela permet d'éviter qu'un conteneur consomme toutes les ressources du nœud.
+
+        Exemple :
+          resources:
+            limits:
+              cpu: "1000m"
+              memory: "1Gi"
+            requests:
+              cpu: "500m"
+              memory: "512Mi"
+      pattern:
+        spec:
+          template:
+            spec:
+              containers:
+              - resources:
+                  limits:
+                    memory: "?*"
+                    cpu: "?*"
+                  requests:
+                    memory: "?*"
+                    cpu: "?*"
+
+  # --------------------------------------------------------------------------
+  # RÈGLE 3 : Interdire l'exécution en tant que root
+  # --------------------------------------------------------------------------
+  - name: deny-root-user
+    match:
+      any:
+      - resources:
+          kinds:
+          - Pod
+          - Deployment
+          - StatefulSet
+          namespaces:
+          - "cesi*"
+    validate:
+      message: >-
+        ❌ SÉCURITÉ : Les conteneurs ne doivent pas s'exécuter en tant que root (UID 0).
+        Utilisez 'runAsUser: 1000' (ou tout UID > 0) dans votre securityContext.
+        Principe du moindre privilège.
+      pattern:
+        spec:
+          =(ephemeralContainers):
+          - =(securityContext):
+              =(runAsUser): ">0"
+          =(initContainers):
+          - =(securityContext):
+              =(runAsUser): ">0"
+          containers:
+          - =(securityContext):
+              =(runAsUser): ">0"
+
+  # --------------------------------------------------------------------------
+  # RÈGLE 4 : Exiger readOnlyRootFilesystem
+  # --------------------------------------------------------------------------
+  - name: require-readonly-rootfs
+    match:
+      any:
+      - resources:
+          kinds:
+          - Deployment
+          - StatefulSet
+          namespaces:
+          - "cesi*"
+    validate:
+      message: >-
+        ❌ SÉCURITÉ : Les conteneurs doivent avoir un système de fichiers root en lecture seule.
+        Utilisez 'readOnlyRootFilesystem: true' et montez des volumes emptyDir
+        pour /tmp et autres dossiers nécessitant des écritures.
+
+        Exemple :
+          securityContext:
+            readOnlyRootFilesystem: true
+          volumeMounts:
+          - name: tmp
+            mountPath: /tmp
+          volumes:
+          - name: tmp
+            emptyDir: {}
+      pattern:
+        spec:
+          template:
+            spec:
+              containers:
+              - securityContext:
+                  readOnlyRootFilesystem: true
+
+  # --------------------------------------------------------------------------
+  # RÈGLE 5 : Limiter le nombre de replicas (ressources partagées)
+  # --------------------------------------------------------------------------
+  - name: limit-replicas
+    match:
+      any:
+      - resources:
+          kinds:
+          - Deployment
+          - StatefulSet
+          namespaces:
+          - "cesi*"
+    validate:
+      message: >-
+        ❌ QUOTA : Le nombre de replicas ne doit pas dépasser 5 en environnement de formation.
+        Le cluster est partagé entre tous les étudiants.
+        Réduisez le nombre de replicas à 5 maximum.
+      pattern:
+        spec:
+          replicas: "<=5"
+
+---
+# ============================================================================
+# CLUSTER POLICY 2 : MUTATION - Standardisation automatique
+# ============================================================================
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: formation-mutation-policies
+  annotations:
+    policies.kyverno.io/title: Politiques de mutation pour formation DevSecOps
+    policies.kyverno.io/category: Best Practices, Automation
+    policies.kyverno.io/description: >-
+      Ajoute automatiquement des labels, annotations et configurations
+      de sécurité aux ressources pour les rendre conformes aux standards.
+spec:
+  background: true
+
+  rules:
+
+  # --------------------------------------------------------------------------
+  # RÈGLE 1 : Ajouter des labels requis
+  # --------------------------------------------------------------------------
+  - name: add-required-labels
+    match:
+      any:
+      - resources:
+          kinds:
+          - Deployment
+          - Service
+          - ConfigMap
+          namespaces:
+          - "cesi*"
+    mutate:
+      patchStrategicMerge:
+        metadata:
+          labels:
+            # Le symbole + signifie "ajouter si absent, ne pas écraser"
+            +(managed-by): "kyverno"
+            +(team): "formation"
+            +(environment): "training"
+
+  # --------------------------------------------------------------------------
+  # RÈGLE 2 : Ajouter securityContext sécurisé si absent
+  # --------------------------------------------------------------------------
+  - name: add-safe-securitycontext
+    match:
+      any:
+      - resources:
+          kinds:
+          - Deployment
+          - StatefulSet
+          namespaces:
+          - "cesi*"
+    mutate:
+      patchStrategicMerge:
+        spec:
+          template:
+            spec:
+              # SecurityContext au niveau du pod
+              securityContext:
+                +(runAsNonRoot): true
+                +(seccompProfile):
+                  type: RuntimeDefault
+              # SecurityContext au niveau des conteneurs
+              containers:
+              - (name): "*"
+                +(securityContext):
+                  +(allowPrivilegeEscalation): false
+                  +(capabilities):
+                    +(drop):
+                    - ALL
+
+  # --------------------------------------------------------------------------
+  # RÈGLE 3 : Ajouter des annotations de documentation
+  # --------------------------------------------------------------------------
+  - name: add-documentation-annotations
+    match:
+      any:
+      - resources:
+          kinds:
+          - Deployment
+          namespaces:
+          - "cesi*"
+    mutate:
+      patchStrategicMerge:
+        metadata:
+          annotations:
+            +(kyverno.io/policy-applied): "formation-mutation-policies"
+            +(security.kubernetes.io/hardened): "true"
+
+---
+# ============================================================================
+# CLUSTER POLICY 3 : GÉNÉRATION - Ressources automatiques
+# ============================================================================
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: formation-generate-policies
+  annotations:
+    policies.kyverno.io/title: Politiques de génération pour formation DevSecOps
+    policies.kyverno.io/category: Multi-Tenancy, Automation
+    policies.kyverno.io/description: >-
+      Génère automatiquement des ressources de gouvernance (ResourceQuota,
+      NetworkPolicy, ConfigMap) pour chaque namespace d'étudiant cesi1-cesi10.
+spec:
+  rules:
+
+  # --------------------------------------------------------------------------
+  # RÈGLE 1 : Générer une ResourceQuota par namespace
+  # --------------------------------------------------------------------------
+  - name: generate-resourcequota
+    match:
+      any:
+      - resources:
+          kinds:
+          - Namespace
+          names:
+          - "cesi?"
+          - "cesi??"
+    generate:
+      apiVersion: v1
+      kind: ResourceQuota
+      name: namespace-quota
+      namespace: "{{request.object.metadata.name}}"
+      synchronize: true
+      data:
+        spec:
+          hard:
+            # Limites globales par namespace étudiant
+            requests.cpu: "4"
+            requests.memory: "8Gi"
+            limits.cpu: "8"
+            limits.memory: "16Gi"
+            persistentvolumeclaims: "5"
+            services: "10"
+            pods: "20"
+
+  # --------------------------------------------------------------------------
+  # RÈGLE 2 : Générer une NetworkPolicy deny-all par défaut
+  # --------------------------------------------------------------------------
+  - name: generate-default-deny-networkpolicy
+    match:
+      any:
+      - resources:
+          kinds:
+          - Namespace
+          names:
+          - "cesi?"
+          - "cesi??"
+    generate:
+      apiVersion: networking.k8s.io/v1
+      kind: NetworkPolicy
+      name: default-deny-ingress
+      namespace: "{{request.object.metadata.name}}"
+      synchronize: true
+      data:
+        spec:
+          # Applique à tous les pods du namespace
+          podSelector: {}
+          policyTypes:
+          - Ingress
+          # Aucune règle ingress = deny all par défaut
+
+  # --------------------------------------------------------------------------
+  # RÈGLE 3 : Générer un ConfigMap d'information
+  # --------------------------------------------------------------------------
+  - name: generate-namespace-info-configmap
+    match:
+      any:
+      - resources:
+          kinds:
+          - Namespace
+          names:
+          - "cesi?"
+          - "cesi??"
+    generate:
+      apiVersion: v1
+      kind: ConfigMap
+      name: namespace-info
+      namespace: "{{request.object.metadata.name}}"
+      synchronize: true
+      data:
+        data:
+          welcome.txt: |
+            ========================================
+            Bienvenue dans votre namespace de formation DevSecOps !
+            ========================================
+
+            Ce namespace est géré automatiquement par Kyverno.
+
+            Ressources créées automatiquement :
+            - ResourceQuota : Limite les ressources utilisées
+            - NetworkPolicy : Sécurise le trafic réseau (deny-all par défaut)
+            - ConfigMap : Ce fichier d'information
+
+            Pour voir les détails de votre namespace :
+            kubectl describe namespace {{request.object.metadata.name}}
+
+            Pour voir vos quotas :
+            kubectl describe resourcequota -n {{request.object.metadata.name}}
+
+            Bon travail !
+
+          quotas.txt: |
+            ========================================
+            LIMITES DE RESSOURCES - Namespace {{request.object.metadata.name}}
+            ========================================
+
+            CPU :
+              - Requests : 4 cores maximum
+              - Limits   : 8 cores maximum
+
+            Mémoire :
+              - Requests : 8 Gi maximum
+              - Limits   : 16 Gi maximum
+
+            Autres :
+              - PersistentVolumeClaims : 5 maximum
+              - Services               : 10 maximum
+              - Pods                   : 20 maximum
+
+            Ces limites garantissent un partage équitable des ressources
+            du cluster entre tous les étudiants.

@@ -1,0 +1,63 @@
+---
+# ============================================================================
+# APPLICATION ARGOCD : Déploiement des politiques Kyverno
+# ============================================================================
+# Cette application ArgoCD déploie les politiques Kyverno cluster-wide
+# pour gérer la sécurité et la gouvernance des namespaces cesi1 à cesi10.
+#
+# À APPLIQUER PAR L'ADMIN DU CLUSTER :
+#   kubectl apply -f k8s/argocd-crds/argocd-kyverno-policies.yaml
+#
+# ============================================================================
+
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: kyverno-policies
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "10"
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  # Projet ArgoCD
+  project: default
+
+  # Source Git
+  source:
+    repoURL: https://github.com/emanzat/demo-boost-startup-java.git
+    targetRevision: HEAD
+    path: k8s/kyverno/admin  # ⚠️ IMPORTANT : Pointer uniquement sur le dossier admin
+
+  # Destination : Cluster local
+  destination:
+    server: https://kubernetes.default.svc
+    # Pas de namespace car ce sont des ClusterPolicies (cluster-wide)
+
+  # Politique de synchronisation
+  syncPolicy:
+    # Synchronisation automatique activée
+    automated:
+      prune: true       # Supprime les ressources non présentes dans Git
+      selfHeal: true    # Répare automatiquement les modifications manuelles
+      allowEmpty: false # Ne pas sync si le dossier est vide
+
+    # Options de synchronisation
+    syncOptions:
+      - CreateNamespace=false  # Pas besoin de créer un namespace (ClusterPolicies)
+      - ServerSideApply=true   # Utiliser Server-Side Apply pour éviter les conflits
+
+    # Retry en cas d'échec
+    retry:
+      limit: 5
+      backoff:
+        duration: 5s
+        factor: 2
+        maxDuration: 3m
+
+  # Comportement en cas de différences
+  ignoreDifferences:
+  - group: kyverno.io
+    kind: ClusterPolicy
+    jqPathExpressions:
+    - .metadata.managedFields

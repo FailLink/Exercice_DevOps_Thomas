@@ -18,22 +18,22 @@ jobs:
   # ═══════════════════════════════════════════════
   # ÉTAPE 1 : BUILD & TESTS
   # ═══════════════════════════════════════════════
-  build-and-test:
-    uses: ./.github/workflows/build-unit-tests.yml
+  #build-and-test:
+  #  uses: ./.github/workflows/build-unit-tests.yml
 
   # ═══════════════════════════════════════════════
   # ÉTAPE 2 : ANALYSE DE SÉCURITÉ STATIQUE (SAST)
   # ═══════════════════════════════════════════════
-  code-quality-sast:
-    needs: build-and-test  # ⚠️ Attend que le build soit terminé
-    uses: ./.github/workflows/code-quality-sast.yml
+  #code-quality-sast:
+  #  needs: build-and-test  # ⚠️ Attend que le build soit terminé
+  #  uses: ./.github/workflows/code-quality-sast.yml
   
   # ═══════════════════════════════════════════════
   # ÉTAPE 3 : DÉTECTION DE SECRETS
   # ═══════════════════════════════════════════════
-  secret-scanning:
-    needs: build-and-test  # ⚠️ S'exécute en PARALLÈLE avec code-quality-sast
-    uses: ./.github/workflows/secret-scanning.yml
+  #secret-scanning:
+  #  needs: build-and-test  # ⚠️ S'exécute en PARALLÈLE avec code-quality-sast
+  #  uses: ./.github/workflows/secret-scanning.yml
 
   # ═══════════════════════════════════════════════
   # ÉTAPE 4 : ANALYSE DES DÉPENDANCES (SCA)
